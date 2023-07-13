@@ -10,6 +10,7 @@ import numpy as np
 import pydicom
 import re
 import matplotlib.pyplot as plt
+import matplotlib
 from matplotlib.widgets import Slider
 import numpy as np
 import random
@@ -17,12 +18,19 @@ from scipy.ndimage import gaussian_filter
 from collections import deque
 import plotly.graph_objs as go
 
-def get_image_paths():
+import matplotlib
+
+def get_image_paths(bodyType=''):
     file_paths_in_image_folder = [os.path.join("/Users/sasv/Documents/Research/MR-fatsup/Images", f) for f in os.listdir("/Users/sasv/Documents/Research/MR-fatsup/Images")]
     for i in range(len(file_paths_in_image_folder)):
-            if re.search('DS', file_paths_in_image_folder[i]):
-                file_paths_in_image_folder.pop(i)
-                break
+        if re.search('DS', file_paths_in_image_folder[i]):
+            file_paths_in_image_folder.pop(i)
+            break
+    if not bodyType == '':
+        for i in range(len(file_paths_in_image_folder)):
+            if not re.search(bodyType, file_paths_in_image_folder[i]):
+                file_paths_in_image_folder[i] = 0
+    file_paths_in_image_folder = [i for i in file_paths_in_image_folder if i != 0]
     return file_paths_in_image_folder
 
 def separate_data(paths, trainingpercentage, testpercentage, valpercentage):
@@ -34,7 +42,8 @@ def separate_data(paths, trainingpercentage, testpercentage, valpercentage):
 
     # Make sure no paths were left out
     if int(len(paths)*trainingpercentage)+int(len(paths)*testpercentage)+int(len(paths)*valpercentage) < len(paths):
-        training_list.append(paths[int(len(paths)*trainingpercentage)+int(len(paths)*testpercentage)+int(len(paths)*valpercentage):len(paths)])
+        for path in paths[int(len(paths)*trainingpercentage)+int(len(paths)*testpercentage)+int(len(paths)*valpercentage):len(paths)]:
+            training_list.append(path)
 
     return training_list, test_list, validation_list
 
@@ -57,6 +66,29 @@ def display_dicom_images(images):
     plt.show()
     
     return slider
+
+def plot_numpy_arrays_on_slider(numpy_array, ax_slider, slider):
+    # Get the current index and maximum value of the slider
+    current_index = int(slider.val)
+    max_index = int(slider.valmax)
+
+    # Increment the maximum value of the slider
+    slider.valmax += 1
+
+    # Update the slider properties
+    slider.ax.set_xlim(slider.valmin, slider.valmax)
+    slider.ax.set_xticks(np.arange(slider.valmin, slider.valmax + 1, 1))
+
+    # Add the new numpy array to the slider
+    ax_slider.sliderdict[slider.cid][0].append(numpy_array)
+
+    # Update the plot based on the new maximum value of the slider
+    if current_index == max_index:
+        slider.set_val(max_index + 1)
+
+    plt.draw()
+    plt.show()
+
 
 def plot_3d_isosurface(data, threshold):
     # Extract dimensions of the data array
@@ -103,3 +135,41 @@ def resize_image(image, size):
     resized_image = np.array(resized_image)
     
     return resized_image
+
+def display_dynamic_3d_array(array, titles):
+    # Initialize the figure and axis
+    fig, ax = plt.subplots()
+    plt.subplots_adjust(bottom=0.25)
+
+    # Create the initial plot with the first 2D array from the 3D array
+    current_index = 0
+    current_array = array[current_index]
+    img = ax.imshow(current_array, cmap='gray')
+    ax.set_title(titles[current_index])
+
+    # Configure the slider
+    ax_slider = plt.axes([0.15, 0.1, 0.7, 0.03])
+    slider = Slider(ax_slider, 'Index', 0, len(array) - 1, valinit=current_index, valstep=1)
+
+    # Update the plot based on the slider value
+    def update(val):
+        nonlocal current_index, current_array
+        current_index = int(val)
+        current_array = array[current_index]
+        img.set_data(current_array)
+        ax.set_title(titles[current_index])
+        fig.canvas.draw_idle()
+
+    # Connect the slider update function to the slider value change event
+    slider.on_changed(update)
+
+    # Function to check for modifications in the array
+    def check_modifications(new_array):
+        nonlocal array
+        if not np.array_equal(array, new_array):
+            array = new_array
+            slider.set_val(0)  # Reset the slider to the first index
+            update(0)  # Update the plot
+
+    # Show the plot
+    plt.show()

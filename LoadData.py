@@ -5,6 +5,7 @@ import re
 import matplotlib.pyplot as plt
 from matplotlib.widgets import Slider
 import CorruptImage
+import random
 
 plt.switch_backend('Qt5Agg')
 
@@ -150,7 +151,7 @@ def load_multiple_series_of_dicom_images_and_data(folder_path, debug=False):
                     if InformationArray[ind1][4] == InformationArray[ind2][4]:
 
                         #Check if it is totalswap
-                        if not InformationArray[ind1][5] == "totalswap":
+                        if  InformationArray[ind1][5] != "totalswap" and str(InformationArray[ind1][5]) != "0":
 
                             #Append a list of the information without isFat with a list of water image first, then fat image
                             if InformationArray[ind2][-1]:
@@ -160,6 +161,8 @@ def load_multiple_series_of_dicom_images_and_data(folder_path, debug=False):
                         
                         #If it is totalswap, swap the order of the fat and water images
                         else:
+
+                            # Change the score to a 5 and swap the fat and water
                             InformationArray[ind1][5] = '5'
                             if InformationArray[ind2][-1]:
                                 totally_perfect_array.append([InformationArray[ind1][:-1], [ImageSeriesArray[ind2], ImageSeriesArray[ind1]]])
@@ -195,36 +198,86 @@ def load_multiple_series_of_dicom_images_and_data(folder_path, debug=False):
     #Return the array containing each series and it's information
     return totally_perfect_array
 
-def SimplifyData(data):
+def SimplifyData(data, plane='', Only2D=False):
     # Takes in one patient's loaded data
+
+    new_data = data.copy()
+
+    def get2DOnly(new_data):
+        for i in range(len(new_data)):
+            if new_data[i][0][3] == "3D":
+                new_data[i] = 0
+        
+        new_data = [i for i in new_data if i != 0]
+        return new_data
+    
+    if Only2D:    
+        new_data = get2DOnly(new_data)
+        if new_data == []:
+            return False
+    
+    # Only use series of showing plane
+    if not plane == '':
+        for i in range(len(new_data)):
+            if not new_data[i][0][6][0] == plane:
+                print(plane)
+                print(new_data[i][0][6][0])
+                new_data[i] = 0
+
+        new_data = [i for i in new_data if i != 0]
+
+    if new_data == []:
+        return False
+
+    #Remove non 5 series
+    data_with_only_5 = []
+    for series in new_data:
+        if str(series[0][5]) == "5":
+            data_with_only_5.append(series)
+        else:
+            print("REMOVED BAD IMAGE PAIR")
 
     # Remove titles from data
     just_image_data = []
-    for series_pair in data:
+    for series_pair in data_with_only_5:
         just_image_data.append(series_pair[1])
 
     # Corrupt each series with corruption factors
     corrupted_data = []
     for image_pair3D in just_image_data:
-        corrupted_data.append(CorruptImage.CorruptImageGenerator(image_pair3D[0], image_pair3D[1]))
+        randfrac = random.randint(1, 2) * 0.1
+        corrupted_data.append(CorruptImage.CorruptImageGenerator(image_pair3D[0], image_pair3D[1], fraction=randfrac))
 
     # Label each slice with its corruption factor, i.e. reshape
     # [[[ser1slice1,se1sl1factor], [ser1slice2, se1sl2factor],..., [se1sliceN, ser1sliceNfactor]], [se2]...]
     better_corrupted_data = []
     for corrupt_image in corrupted_data:
-        image_factor_stack = []
+        image_factor_weight_stack = []
         for ind in range(len(corrupt_image[1])):
-            image_factor_stack.append([corrupt_image[0][0:len(corrupt_image[0]), 0:len(corrupt_image[0][0]), ind], corrupt_image[1][ind]])
+            image_factor_weight_stack.append([corrupt_image[0][0:len(corrupt_image[0]), 0:len(corrupt_image[0][0]), ind], corrupt_image[1][ind], corrupt_image[2][ind]])
             #if corrupt_image[1][ind] > 0.15: # 0.15 is the threshold for fat images
             #   image_factor_stack.append([corrupt_image[0][0:len(corrupt_image[0]), 0:len(corrupt_image[0][0]), ind], 1])
             #else:
             #   image_factor_stack.append([corrupt_image[0][0:len(corrupt_image[0]), 0:len(corrupt_image[0][0]), ind], 0])
-        better_corrupted_data.append(image_factor_stack)
+        better_corrupted_data.append(image_factor_weight_stack)
 
     # Concatenates each series i.e. flattens to a list of pairs of 2D image/label
     even_better_corrupted_data = []
     for series_pair in better_corrupted_data:
         for corim in series_pair:
             even_better_corrupted_data.append(corim)
+
+    # Remove slices with mostly air
+    weights = []
+    for image_group in even_better_corrupted_data:
+        weights.append(image_group[2])
+
+    max_weight = max(weights)
+    min_weight = min(weights)
+    cutoff = min_weight + (max_weight - min_weight) * 0.1
+    bad_factor_removed = []
+    for image_group in even_better_corrupted_data:
+        if image_group[2] > cutoff:
+            bad_factor_removed.append(image_group)
     
-    return even_better_corrupted_data
+    return bad_factor_removed
