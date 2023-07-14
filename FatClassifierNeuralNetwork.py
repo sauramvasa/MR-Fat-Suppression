@@ -24,8 +24,7 @@ print("Imported modules")
 
 matplotlib.use("MacOSX")
 plt.ion()
-fig1 = plt.figure()
-fig4 = plt.figure()
+
 
 # Hyper-parameters
 imsize = [128,128]
@@ -318,7 +317,7 @@ def TrainCNN2(num_epochs, training_paths, num_augs, batch_size, target_loss=0, d
 def TrainCNN3(num_epochs, training_paths, num_augs, batch_size, target_loss=0, plane='', continuous=False, debug=False):
     
     # Turn training paths into smaller sublists to train on
-    ppb = 3 # Patient Per Batch
+    ppb = 2 # Patient Per Batch
     training_paths = [training_paths[i:i + ppb] for i in range(0, len(training_paths), ppb)]
     print(training_paths)
 
@@ -355,10 +354,15 @@ def TrainCNN3(num_epochs, training_paths, num_augs, batch_size, target_loss=0, p
 
         # Faster training
         if debug:
-            num_epochs = 30
-            num_augs = 20
-            training_paths = training_paths
+            display = False
+            num_epochs = 3
+            num_augs = 2
+            training_paths = training_paths[0:1]
         
+        fig1, ax = plt.subplots(2)
+        if display:
+            fig4 = plt.figure()
+
         index = 0
         for patient_group in training_paths:
             index += 1
@@ -394,12 +398,12 @@ def TrainCNN3(num_epochs, training_paths, num_augs, batch_size, target_loss=0, p
                                 image_group[1] = 1
 
                     # Display a random corrupted image if debug is on
-                    #if debug:
-                    #    randind = random.randint(0, len(train_image_list) - 1)
-                    #    plt.imshow(train_image_list[randind][0], cmap='gray')
-                    #    plt.title(f'Image with Category {train_image_list[randind][1]:.4f}, Weight {train_image_list[randind][2]:.4f}, and Index {randind:.4f}')
-                    #    fig4.canvas.draw()
-                    #    fig4.canvas.flush_events()
+                    if display:
+                        randind = random.randint(0, len(train_image_list) - 1)
+                        plt.imshow(train_image_list[randind][0], cmap='gray')
+                        plt.title(f'Image with Category {train_image_list[randind][1]:.4f}, Weight {train_image_list[randind][2]:.4f}, and Index {randind:.4f}')
+                        fig4.canvas.draw()
+                        fig4.canvas.flush_events()
                     
                     train_dataset = create_dataset(train_image_list)
                     
@@ -414,6 +418,7 @@ def TrainCNN3(num_epochs, training_paths, num_augs, batch_size, target_loss=0, p
                 print("Training on epoch " + str(epoch + 1))
                 running_loss = 0.0
                 correct = 0
+                dataloader_counter = 0
                 for images, labels, w in train_dataloader:
                     # Move the images and labels to the device
                     images = images.to(device)
@@ -429,7 +434,12 @@ def TrainCNN3(num_epochs, training_paths, num_augs, batch_size, target_loss=0, p
                     else:
                         _, predicted = torch.max(outputs.data, 1)
                         loss = criterion(outputs, torch.Tensor.long(labels))
-                        correct += (predicted == labels).sum().item()
+
+                        # Get accuracy
+                        for i in range(len(predicted.tolist())):
+                            dataloader_counter += 1
+                            if labels[i] == predicted[i]:
+                                correct += 1
                     
                     # Backward pass and optimization
                     loss.backward()
@@ -438,17 +448,20 @@ def TrainCNN3(num_epochs, training_paths, num_augs, batch_size, target_loss=0, p
                     running_loss += loss.item()
 
                 loss_values.append(running_loss/len(train_dataloader))
-                accuracy_values.append(correct/len(train_dataloader))
+                accuracy_values.append(correct/dataloader_counter)
 
                 # Print and plot the average loss for this epoch
-                print(f"Epoch {epoch+1}/{num_epochs} Loss: {running_loss/len(train_dataloader)}, Accuracy: {correct/len(train_dataloader)}")
-                plt.plot(loss_values)
-                plt.plot(accuracy_values)
-                plt.yscale("log")
+                print(f"Epoch {epoch+1}/{num_epochs} Loss: {running_loss/len(train_dataloader)}, Accuracy: {correct/dataloader_counter}")
+                ax[0].plot(loss_values)
+                ax[0].set_yscale("log")
+                ax[0].set_title("Training Loss")
+                ax[1].plot(accuracy_values)
+                ax[1].set_title("Training Accuracy")
+                fig1.tight_layout(pad=4.0)
                 fig1.canvas.draw()
                 fig1.canvas.flush_events()
 
-        torch.save(model.state_dict(), '/Users/sasv/Documents/Research/MR-fatsup/Models/model.pth3')
+        torch.save(model.state_dict(), '/Users/sasv/Documents/Research/MR-fatsup/Models/model.pth4')
 
 images_shown = []
 titles_shown = []
@@ -931,7 +944,7 @@ def display_class_activation_map():
     LoadedImage = LoadData.load_multiple_series_of_dicom_images_and_data("/Users/sasv/Documents/Research/MR-fatsup/Images/thigh-2-T2-T2-post-4-4-0")
 
     # Prepare the data for testing
-    test_image_list = LoadData.SimplifyData(LoadedImage)
+    test_image_list = LoadData.SimplifyData(LoadedImage, plane='Ax')
     dataloader_ready_testdataset = create_dataset(test_image_list)
     image_tensor = torch.Tensor.float(dataloader_ready_testdataset[100][0])
     #image_tensor.requires_grad_(True)
@@ -1015,9 +1028,9 @@ print(len(test_paths))
 with profiler.profile(activities=[profiler.ProfilerActivity.CPU], record_shapes=True) as prof:
     with profiler.record_function("model_inference"):
         TrainCNN3(num_epochs, training_paths, num_augs, batch_size, plane='Ax', continuous=False, debug=True)
-        TestCNN(test_paths, batch_size, continuous=False, plane='Ax', debug=True)
+        #TestCNN(test_paths, batch_size, continuous=False, plane='Ax', debug=True)
 
 print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
 
 #VisualizeFeatureMaps()
-#isplay_class_activation_map()
+#display_class_activation_map()
