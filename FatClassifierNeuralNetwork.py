@@ -19,6 +19,7 @@ import matplotlib.pyplot as plt
 import matplotlib
 import random
 import glob as glob
+import time
 
 print("Imported modules")
 
@@ -32,6 +33,9 @@ num_epochs = 30
 batch_size = 250
 num_augs = 5
 learning_rate = 0.0001
+iterations = 10
+number_of_corruption_functions = 3
+corruption_function_size = (100, 128, 128)
 print(imsize)
 
 
@@ -99,7 +103,8 @@ class CNN(nn.Module):
         self.relu5 = nn.ReLU()
         self.dropout5 = nn.Dropout(0.2)
         self.maxpool5 = nn.MaxPool2d(kernel_size=2, stride=2)
-        self.fc = nn.Linear(64*4*4, 2)
+        self.fc1 = nn.Linear(64*4*4, 64*4*4)
+        self.fc2 = nn.Linear(64*4*4, 2)
         #self.softmax = nn.Softmax(dim=1)
     
     def forward(self, x):
@@ -129,7 +134,8 @@ class CNN(nn.Module):
         x = self.dropout5(x)
         x = self.maxpool5(x)
         x = x.view(x.size(0), -1)
-        x = self.fc(x)
+        x = self.fc1(x)
+        x = self.fc2(x)
         #output = self.softmax(x)      
         return x
 
@@ -471,7 +477,7 @@ def TrainCNN3(num_epochs, training_paths, num_augs, batch_size, target_loss=0, p
                 fig1.canvas.draw()
                 fig1.canvas.flush_events()
 
-        torch.save(model.state_dict(), '/Users/sasv/Documents/Research/MR-fatsup/Models/model.pth4')
+        torch.save(model.state_dict(), '/Users/sasv/Documents/Research/MR-fatsup/Models/model.pth3')
 
 images_shown = []
 titles_shown = []
@@ -591,12 +597,153 @@ def TrainCNN4(num_epochs, training_paths, num_augs, batch_size, target_loss=0, d
 
     torch.save(model.state_dict(), '/Users/sasv/Documents/Research/MR-fatsup/Models/model.pth4')
 
+def TrainCNN5(num_epochs, training_paths, num_augs, batch_size, target_loss=0, plane='', continuous=False, debug=False):
+
+    # Create an instance of the CNN
+    model = CNN()
+
+    # Set the device (GPU if available, otherwise CPU)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    # Define the loss function and optimizer
+    if continuous:
+        criterion = nn.MSELoss()
+    else:
+        criterion = nn.CrossEntropyLoss()
+
+    optimizer = optim.Adam(model.parameters(), lr=learning_rate)
+
+    # Move the loss function to the device
+    criterion.to(device)
+
+    # Check if CNN already exists
+    #if os.path.exists('/Users/sasv/Documents/Research/MR-fatsup/Models/model.pth'):
+        #pass
+
+    # The CNN does not exist
+    if debug:
+
+        # Set the model in training mode move the model to the device
+        model.to(device)
+        model.train()
+
+        loss_values = []
+        accuracy_values = []
+
+        # Faster training
+        if debug:
+            display = False
+            num_epochs = 50
+            num_augs = 20
+            batch_size = 40
+            iterations = 50
+        
+        fig1, ax = plt.subplots(2)
+        if display:
+            fig4, ax4 = plt.subplots(3)
+
+        series_folders = Utilities.series_folders(training_paths)
+        corruption_functions = []
+        for i in range(number_of_corruption_functions):
+            print("Getting corruption function " + str(i + 1))
+            rand_frac = random.randint(1,4) * 0.1
+            func = FunctionGenerator.generate_smooth_function(corruption_function_size, fraction=rand_frac)
+            corruption_functions.append(func)
+
+        for epoch in range(num_epochs):
+            print("Training on epoch " + str(epoch + 1))
+            running_loss = 0.0
+            correct = 0
+            dataloader_counter = 0
+            for batch_number in range(iterations):
+
+                # Load in batch
+                batch = []
+                for slice_number in range(batch_size):
+                    rand_fold = series_folders[random.randint(0, len(series_folders) - 1)]
+                    rand_corr = corruption_functions[random.randint(0, len(corruption_functions) - 1)]
+                    image_slices = Utilities.prep_random_image_from_folder(rand_fold, rand_corr, num_augs=num_augs, imsize=imsize)
+                    index = 0
+                    for image_slice in image_slices[0:-2]:
+                        if display and index == 0:
+                            ax4[0].imshow(image_slice[0].squeeze(0), cmap='gray')
+                            ax4[0].set_title(f'Image with Category {image_slice[1]:.4f}')
+                            ax4[1].imshow(image_slices[-2], cmap='gray')
+                            ax4[1].set_title(f'Water Image')
+                            ax4[2].imshow(image_slices[-1], cmap='gray')
+                            ax4[2].set_title(f'Fat Image')
+                            fig4.tight_layout(pad=2.0)
+                            fig4.canvas.draw()
+                            fig4.canvas.flush_events()
+                            
+                        if continuous:
+                            batch.append(image_slice)
+                        else: # Categorize factors
+                            if image_slice[1] <= 0.05:
+                                image_slice[1] = 0
+                            #elif image_group[1] <= 0.1:
+                                #image_group[1] = 1
+                            #elif image_group[1] <= 0.30:
+                            #    image_group[1] = 2
+                            else:
+                                image_slice[1] = 1
+                            batch.append(image_slice)
+                        index += 1 
+
+                train_dataloader = DataLoader(batch, batch_size=batch_size * num_augs, shuffle=True)
+                print("Done loading batch " + str(batch_number + 1))
+                
+                # Train on batch
+                for images, labels in train_dataloader:
+                    # Move the images and labels to the device
+                    images = images.to(device)
+                    labels = labels.to(device)
+
+                    # Zero the gradients
+                    optimizer.zero_grad()
+                    
+                    # Forward pass
+                    outputs = model(torch.Tensor.float(images))
+                    if continuous:
+                        loss = criterion(outputs, torch.Tensor.float(labels).unsqueeze(1))
+                    else:
+                        _, predicted = torch.max(outputs.data, 1)
+                        loss = criterion(outputs, torch.Tensor.long(labels))
+
+                        # Get accuracy
+                        for i in range(len(predicted.tolist())):
+                            dataloader_counter += 1
+                            if labels[i] == predicted[i]:
+                                correct += 1
+                    
+                    # Backward pass and optimization
+                    loss.backward()
+                    optimizer.step()
+                    
+                    running_loss += loss.item()
+
+            loss_values.append(running_loss/len(train_dataloader))
+            accuracy_values.append(correct/dataloader_counter)
+
+            # Print and plot the average loss for this epoch
+            print(f"Epoch {epoch+1}/{num_epochs} Loss: {running_loss/len(train_dataloader)}, Accuracy: {correct/dataloader_counter}")
+            ax[0].plot(loss_values)
+            ax[0].set_yscale("log")
+            ax[0].set_title("Training Loss")
+            ax[1].plot(accuracy_values)
+            ax[1].set_title("Training Accuracy")
+            fig1.tight_layout(pad=2.0)
+            fig1.canvas.draw()
+            fig1.canvas.flush_events()
+
+        torch.save(model.state_dict(), '/Users/sasv/Documents/Research/MR-fatsup/Models/model.pth5')
+
 storeTests=[]
 def TestCNN(test_paths, batch_size, continuous=False, plane='', debug=False):
 
     # Assume the model has been trained and saved the regression model as 'model.pth'
     model = CNN()
-    model.load_state_dict(torch.load('/Users/sasv/Documents/Research/MR-fatsup/Models/model.pth3'))
+    model.load_state_dict(torch.load('/Users/sasv/Documents/Research/MR-fatsup/Models/model.pth5'))
     model.eval()
 
     # Move the model to the device
@@ -620,7 +767,7 @@ def TestCNN(test_paths, batch_size, continuous=False, plane='', debug=False):
 
         # Prepare the data for testing
         test_image_list = LoadData.SimplifyData(LoadedTestData, plane=plane)
-        storeTests.append(test_image_list)
+        #storeTests.append(test_image_list)
 
         # Turn all factors to labels if not continuous
         if not continuous:
@@ -1025,7 +1172,7 @@ def display_class_activation_map():
 
 
 
-image_folder_paths = Utilities.get_image_paths(bodyType='thigh')
+image_folder_paths = Utilities.get_image_paths()
 training_paths, test_paths, validation_paths = Utilities.separate_data(image_folder_paths, 0.60, 0.20, 0.20)
 
 print("Training folders")
@@ -1039,8 +1186,8 @@ print(len(test_paths))
 
 with profiler.profile(activities=[profiler.ProfilerActivity.CPU], record_shapes=True) as prof:
     with profiler.record_function("model_inference"):
-        TrainCNN3(num_epochs, training_paths, num_augs, batch_size, plane='Ax', continuous=False, debug=True)
-        #TestCNN(test_paths, batch_size, continuous=False, plane='Ax', debug=True)
+        TrainCNN5(num_epochs, training_paths, num_augs, batch_size, continuous=False, debug=True)
+        TestCNN(test_paths, batch_size, continuous=False, debug=True)
 
 print(prof.key_averages().table(sort_by="cpu_time_total", row_limit=10))
 

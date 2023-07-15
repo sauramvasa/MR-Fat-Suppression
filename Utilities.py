@@ -6,9 +6,11 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import Dataset, DataLoader
+from torchvision import transforms
 import numpy as np
 import pydicom
 import re
+import math
 import matplotlib.pyplot as plt
 import matplotlib
 from matplotlib.widgets import Slider
@@ -46,6 +48,122 @@ def separate_data(paths, trainingpercentage, testpercentage, valpercentage):
             training_list.append(path)
 
     return training_list, test_list, validation_list
+
+def series_folders(paths):
+    '''
+    Input: patient folder paths
+    Output: series pairs folder paths
+    '''
+
+    #Get parts of folder name
+    patient_paths_plus_info = []
+    for patient_path in paths:
+        folder_name = patient_path.replace("/Users/sasv/Documents/Research/MR-fatsup/Images/", '')
+        patient_paths_plus_info.append([patient_path, folder_name.split("-")])
+
+    #Get the folders with DICOM files
+    all_series_folders = []
+    for patient_path in patient_paths_plus_info:
+        DICOM_folder_path = patient_path[0] + "/DICOM"
+        new_folder_path = DICOM_folder_path
+        for i in range(3):
+            new_folder_path1 = [os.path.join(new_folder_path, f) for f in os.listdir(new_folder_path)][0]
+            if re.search('.DS', new_folder_path1):
+                new_folder_path1 = [os.path.join(new_folder_path, f) for f in os.listdir(new_folder_path)][1]
+            new_folder_path = new_folder_path1
+        new_folder_paths = [os.path.join(new_folder_path, f) for f in os.listdir(new_folder_path)]
+        for i in range(len(new_folder_paths)):
+            if re.search('DS', new_folder_paths[i]):
+                new_folder_paths.pop(i)
+                break
+        
+        for path in new_folder_paths:
+            all_series_folders.append([path, patient_path[1], len(new_folder_paths)])
+    
+    #Get the series number of each series
+    all_series_folders_plus_series_numbers_contrast_type = []
+    for series_folder in all_series_folders:
+        ex_slice_path = series_folder[0] + "/" + os.listdir(series_folder[0])[0]
+        ex_slice = pydicom.dcmread(ex_slice_path)
+        all_series_folders_plus_series_numbers_contrast_type.append([series_folder[0], ex_slice.SeriesNumber, ex_slice.SeriesDescription, series_folder[1], series_folder[2]])
+    
+    #Get fat water pairs
+    paired_series_folders_with_duplicates = []
+    for series_folder1 in all_series_folders_plus_series_numbers_contrast_type:
+        for series_folder2 in all_series_folders_plus_series_numbers_contrast_type:
+            if series_folder1[0] != series_folder2[0] and series_folder1[0].split("/")[7].split("-")[0:2] == series_folder2[0].split("/")[7].split("-")[0:2]:
+                scores = series_folder1[3][-series_folder1[4]//2:]
+                types = series_folder1[3][-series_folder1[4]: -series_folder1[4]//2]
+                for index in range(len(types)):
+                    if types[index] in series_folder1[2]:
+                        score = scores[index]
+                if series_folder1[1] % 100 == 0 and series_folder1[1] / 100 == series_folder2[1]:
+                    if str(score) == "0" or str(score) == "totalswap":
+                        paired_series_folders_with_duplicates.append([series_folder1[0], series_folder2[0]])
+                    elif str(score) != "5":
+                        break
+                    else:
+                        paired_series_folders_with_duplicates.append([series_folder2[0], series_folder1[0]])
+                elif series_folder2[1] % 100 == 0 and series_folder2[1] / 100 == series_folder1[1]:
+                    if str(score) == "0" or str(score) == "totalswap":
+                        paired_series_folders_with_duplicates.append([series_folder2[0], series_folder1[0]])
+                    elif str(score) != "5":
+                        break
+                    else:
+                        paired_series_folders_with_duplicates.append([series_folder1[0], series_folder2[0]])
+    
+    #remove duplicates
+    paired_series_folders = []
+    [paired_series_folders.append(x) for x in paired_series_folders_with_duplicates if x not in paired_series_folders]
+        
+    return paired_series_folders
+
+def prep_random_image_from_folder(folder_pair, corruption_functions, num_augs=1, imsize=[128, 128]):
+
+    # Get fat and water slices
+    series_length = len(os.listdir(folder_pair[0]))
+    random_integer0 = random.randint(0, series_length - 1)
+    water_slice = np.zeros((128, 128))
+    for path_name in os.listdir(folder_pair[0]):
+        water_slice_path = folder_pair[0] + "/" + path_name
+        raw_water_slice = pydicom.dcmread(water_slice_path)
+        if int(raw_water_slice.InstanceNumber) == random_integer0:
+            water_slice = resize_image(raw_water_slice.pixel_array, imsize)
+    fat_slice = np.zeros((128, 128))
+    for path_name in os.listdir(folder_pair[1]):
+        fat_slice_path = folder_pair[1] + "/" + path_name
+        raw_fat_slice = pydicom.dcmread(fat_slice_path)
+        if int(raw_fat_slice.InstanceNumber) == random_integer0:
+            fat_slice = resize_image(raw_fat_slice.pixel_array, imsize)
+
+    prepped_corrupted_image_slices = []
+    for aug in range(num_augs):
+
+        # Get corruption slice
+        random_integer1 = random.randint(0, len(corruption_functions) - 1)
+        random_integer2 = random.randint(0, len(corruption_functions[random_integer1]) - 1)
+        corruption_slice = corruption_functions[random_integer1][random_integer2]
+
+
+        # Corrupt image and get corruption factor
+        scaled_fat_slice = fat_slice * corruption_slice
+        corrupted_image_slice = scaled_fat_slice + water_slice
+        corruption_factor = np.sum(np.sum(scaled_fat_slice)) / (np.sum(np.sum(water_slice + fat_slice)))
+        
+        # Normalize the pixel values to range between 0 and 255
+        normalized_image = (corrupted_image_slice / np.amax(corrupted_image_slice)) * 255.0
+
+        # Transform the image to a tensor and normalize it
+        intarr = normalized_image.astype(int)
+        trans = transforms.Compose([transforms.ToTensor()])
+        prepped_corrupted_image_slice = trans(intarr)
+        prepped_corrupted_image_slices.append([prepped_corrupted_image_slice, corruption_factor])
+    
+    prepped_corrupted_image_slices.append(water_slice)
+    prepped_corrupted_image_slices.append(fat_slice)
+
+    return prepped_corrupted_image_slices
+
 
 def display_dicom_images(images):
     fig, ax = plt.subplots()
