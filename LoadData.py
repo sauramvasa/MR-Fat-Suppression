@@ -14,17 +14,18 @@ def load_dicom_images(folder_path):
  
     file_paths = [os.path.join(folder_path, f) for f in os.listdir(folder_path)]
     
-    images = np.zeros(len(file_paths), dtype=np.ndarray)
+    images = np.zeros(len(file_paths)//2, dtype=np.ndarray)
 
     # Load each DICOM file into a numpy array
     for file_path in file_paths:
+        if re.search('._', file_path):
+            continue
         dataset = pydicom.dcmread(file_path)
 
         IN = dataset.InstanceNumber
-        images[IN - 1 ] = dataset.pixel_array
+        images[IN - 1] = dataset.pixel_array\
     
     # Stack the images into a 3D numpy array (height, width, depth)
-    
     images = np.stack(images, axis=-1)
 
     return images
@@ -32,7 +33,7 @@ def load_dicom_images(folder_path):
 def load_multiple_series_of_dicom_images_and_data(folder_path, debug=False):
 
     #Get parts of folder name
-    folder_name = folder_path.replace("/Users/sasv/Documents/Research/MR-fatsup/Images/", '')
+    folder_name = folder_path.replace("/home/sauram/Documents/Research/MR-fatsup/Images/", '')
     parts_of_name = folder_name.split("-")
 
     #Determine whether the folder contains test data or training data and get body part and example number
@@ -51,11 +52,21 @@ def load_multiple_series_of_dicom_images_and_data(folder_path, debug=False):
     DICOM_folder_path = folder_path + "/DICOM"
     new_folder_path = DICOM_folder_path
     for i in range(3):
-        new_folder_path1 = [os.path.join(new_folder_path, f) for f in os.listdir(new_folder_path)][0]
+        unusable = os.listdir(new_folder_path)
+        for path in range(len(unusable)):
+            if re.search('._', unusable[path]):
+                unusable[path] = 0
+        unusable = [i for i in unusable if i != 0]
+        new_folder_path1 = [os.path.join(new_folder_path, f) for f in unusable][0]
         if re.search('.DS', new_folder_path1):
-            new_folder_path1 = [os.path.join(new_folder_path, f) for f in os.listdir(new_folder_path)][1]
+            new_folder_path1 = [os.path.join(new_folder_path, f) for f in unusable][1]
         new_folder_path = new_folder_path1
-    new_folder_paths = [os.path.join(new_folder_path, f) for f in os.listdir(new_folder_path)]
+    new_folder_paths_unusable = os.listdir(new_folder_path)
+    for path in range(len(new_folder_paths_unusable)):
+        if re.search('._', new_folder_paths_unusable[path]):
+            new_folder_paths_unusable[path] = 0
+    new_folder_paths_unusable = [i for i in new_folder_paths_unusable if i != 0]
+    new_folder_paths = [os.path.join(new_folder_path, f) for f in new_folder_paths_unusable]
     for i in range(len(new_folder_paths)):
         if re.search('DS', new_folder_paths[i]):
             new_folder_paths.pop(i)
@@ -82,11 +93,18 @@ def load_multiple_series_of_dicom_images_and_data(folder_path, debug=False):
     for folder in new_folder_paths:
 
         #Load the data in the folder
+        if re.search('._', folder):
+            continue
+        print(folder)
         series = load_dicom_images(folder)
 
         #Get one dicom file in the folder
         file_paths = [os.path.join(folder, f) for f in os.listdir(folder)]
-        info_dataset = pydicom.dcmread(file_paths[0])
+        for path in file_paths:
+            if not re.search('._', path):
+                file_path = path
+                break
+        info_dataset = pydicom.dcmread(file_path)
 
         #Get flip angle, acquisition matrix, and MR acquisition type
         #flip_angle = info_dataset.FlipAngle
