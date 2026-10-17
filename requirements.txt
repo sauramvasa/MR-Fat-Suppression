@@ -1,0 +1,9 @@
+numpy
+scipy
+matplotlib
+torch
+torchvision
+pydicom
+Pillow
+joblib
+plotly
